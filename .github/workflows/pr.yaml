@@ -1,0 +1,93 @@
+name: Test PR
+on:
+  pull_request:
+    paths:
+      - "sources/**"
+      - "templates/**"
+      - ".github/workflows/pr.yaml"
+
+jobs:
+  tests:
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_CACHE_SIZE: 2G
+      SCCACHE_VERSION: 0.3.0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get changed files
+        id: files
+        uses: Ana06/get-changed-files@v2.2.0
+        with:
+          format: json
+      - name: Process changed files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          readarray -t TEMP <<< "$(jq -r '.[]' <<<'${{ steps.files.outputs.added_modified }}')"
+          for line in "${TEMP[@]}"
+          do
+            if [[ "$line" == *"sources"* || "$line" == *"templates"* ]]; then
+              echo "SETUP_RUST=true" >> $GITHUB_ENV
+            fi
+          done
+      - name: Cache rust stuff
+        uses: actions/cache@v4
+        if: ${{ env.SETUP_RUST == 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/bin
+            sources/**/target
+          key: ${{ runner.os }}-cargo3-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo3-
+      - name: sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: ${{ runner.os }}-sccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-sccache-
+      - uses: actions-rs/toolchain@v1
+        if: ${{ env.SETUP_RUST == 'true' }}
+        with:
+          toolchain: stable
+          override: true
+          target: wasm32-unknown-unknown
+      - name: Install build dependencies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo ln -s $(which wasm-ld-13 || which wasm-ld-12 || which wasm-ld-11 || which wasm-ld-10) /usr/bin/wasm-ld
+
+          cargo install --git https://github.com/Aidoku/aidoku-rs --branch next aidoku-cli
+
+          SCCACHE_FILE=sccache-v$SCCACHE_VERSION-x86_64-unknown-linux-musl
+          curl -L https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VERSION/$SCCACHE_FILE.tar.gz | tar -xz
+          sudo mv -f $SCCACHE_FILE/sccache* /usr/local/bin/sccache
+          sudo chmod +x /usr/local/bin/sccache
+      - name: Build sources
+        id: build
+        run: |
+          readarray -t TEMP <<< "$(jq -r '.[]' <<<'${{ steps.files.outputs.added_modified }}')"
+
+          while IFS= read -r -d $'\0' i; do
+            if [[ "$i" == *"sources"* ]]; then
+              (
+                cd "$i"
+                aidoku package
+              )
+            fi
+          done < <(printf "%s\n" "${TEMP[@]}" | cut -d'/' -f-3 | sort -u | grep 'sources' | tr '\n' '\0')
+      - name: Test if sources are valid
+        run: aidoku verify ./**/*.aix
+      - name: Flatten packages directory
+        if: always()
+        run: aidoku build ./**/*.aix
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packages
+          path: public/sources/*.aix
+          if-no-files-found: ignore

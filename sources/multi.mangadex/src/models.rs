@@ -1,0 +1,428 @@
+use crate::{settings, COVER_URL};
+use aidoku::{
+	alloc::{String, Vec},
+	prelude::format,
+	Chapter, ContentRating, Manga, MangaStatus, Viewer,
+};
+use chrono::DateTime;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+#[derive(Default, Deserialize, Serialize, Debug, Clone)]
+pub struct TokenResponse {
+	pub access_token: Option<String>,
+	pub refresh_token: Option<String>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexResponse<T> {
+	// pub result: &'a str,
+	// pub response: &'a str,
+	pub data: T,
+	// pub offset: Option<i32>,
+	pub total: Option<i32>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexStatusResponse {
+	// pub result: &'a str,
+	pub statuses: Map<String, Value>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexRelationship<'a> {
+	pub id: &'a str,
+	pub r#type: &'a str,
+	pub attributes: Option<Map<String, Value>>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case", default)]
+pub struct DexLocalizedString {
+	pub en: Option<String>,
+	pub ja: Option<String>,
+	pub ja_ro: Option<String>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexTag {
+	// pub id: String,
+	pub attributes: DexTagAttributes,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexTagAttributes {
+	pub name: DexLocalizedString,
+}
+
+// generic data result without attribuets
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexData<'a> {
+	pub id: &'a str,
+	// pub relationships: Vec<DexRelationship<'a>>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexCustomList<'a> {
+	pub id: &'a str,
+	pub attributes: DexCustomListAttributes,
+	pub relationships: Vec<DexRelationship<'a>>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexCoverArt {
+	// pub id: &'a str,
+	pub attributes: DexCoverArtAttributes,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexManga<'a> {
+	pub id: &'a str,
+	pub attributes: DexMangaAttributes,
+	pub relationships: Vec<DexRelationship<'a>>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum DexContentRating {
+	Safe,
+	Suggestive,
+	Erotica,
+	Pornographic,
+}
+
+impl Default for DexContentRating {
+	fn default() -> Self {
+		DexContentRating::Safe
+	}
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum DexStatus {
+	Completed,
+	Ongoing,
+	Cancelled,
+	Hiatus,
+}
+
+impl Default for DexStatus {
+	fn default() -> Self {
+		DexStatus::Ongoing
+	}
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexCustomListAttributes {
+	pub name: String,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DexCoverArtAttributes {
+	pub file_name: String,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DexMangaAttributes {
+	pub title: DexLocalizedString,
+	pub description: DexLocalizedString,
+	pub original_language: String,
+	pub content_rating: DexContentRating,
+	pub tags: Vec<DexTag>,
+	pub status: DexStatus,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+pub struct DexChapter<'a> {
+	pub id: &'a str,
+	pub attributes: DexChapterAttributes<'a>,
+	pub relationships: Vec<DexRelationship<'a>>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DexChapterAttributes<'a> {
+	pub title: Option<String>,
+	pub volume: Option<&'a str>,
+	pub chapter: Option<&'a str>,
+	pub external_url: Option<Value>,
+	pub translated_language: &'a str,
+	pub publish_at: &'a str,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DexAtHomeResponse<'a> {
+	pub base_url: String,
+	#[serde(borrow)]
+	pub chapter: DexAtHomeChapter<'a>,
+}
+
+#[derive(Default, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DexAtHomeChapter<'a> {
+	pub hash: &'a str,
+	pub data: Option<Vec<&'a str>>,
+	pub data_saver: Option<Vec<&'a str>>,
+}
+
+impl DexLocalizedString {
+	pub fn get(&self) -> Option<String> {
+		if let Some(en) = &self.en {
+			Some(en.clone())
+		} else if let Some(ja_ro) = &self.ja_ro {
+			Some(ja_ro.clone())
+		} else if let Some(ja) = &self.ja {
+			Some(ja.clone())
+		} else {
+			None
+		}
+	}
+}
+
+impl DexManga<'_> {
+	pub fn into_basic_manga(&self) -> Manga {
+		Manga {
+			key: String::from(self.id),
+			title: self.title().unwrap_or_default(),
+			cover: self.cover(),
+			..Default::default()
+		}
+	}
+
+	pub fn into_manga(&self) -> Manga {
+		let tags = self.tags();
+		let viewer = if tags.iter().any(|t| t == "Long Strip") {
+			Viewer::Webtoon
+		} else {
+			match self.attributes.original_language.as_str() {
+				"ja" => Viewer::RightToLeft,
+				"zh" | "ko" => Viewer::Webtoon,
+				_ => Viewer::RightToLeft,
+			}
+		};
+		Manga {
+			key: String::from(self.id),
+			title: self.title().unwrap_or_default(),
+			cover: self.cover(),
+			artists: Some(self.artists()),
+			authors: Some(self.authors()),
+			description: self.description(),
+			url: Some(self.url()),
+			tags: Some(tags),
+			status: self.status(),
+			content_rating: self.content_rating(),
+			viewer,
+			..Default::default()
+		}
+	}
+
+	pub fn title(&self) -> Option<String> {
+		self.attributes.title.get()
+	}
+
+	pub fn description(&self) -> Option<String> {
+		self.attributes.description.get()
+	}
+
+	pub fn cover(&self) -> Option<String> {
+		self.relationships.iter().find_map(|r| {
+			if r.r#type == "cover_art" {
+				Some(format!(
+					"{COVER_URL}/covers/{}/{}{}",
+					self.id,
+					r.attributes
+						.clone()
+						.map(|v| v.get("fileName").map(|v| v.as_str().map(String::from)))
+						.flatten()
+						.flatten()
+						.unwrap_or_default(),
+					settings::get_cover_quality()
+				))
+			} else {
+				None
+			}
+		})
+	}
+
+	pub fn authors(&self) -> Vec<String> {
+		self.relationships
+			.iter()
+			.filter(|r| r.r#type == "author")
+			.filter_map(|r| {
+				r.attributes
+					.as_ref()
+					.map(|a| a.get("name").map(|v| v.as_str().map(String::from)))
+			})
+			.flatten()
+			.flatten()
+			.collect()
+	}
+
+	pub fn artists(&self) -> Vec<String> {
+		self.relationships
+			.iter()
+			.filter(|r| r.r#type == "artist")
+			.filter_map(|r| {
+				r.attributes
+					.as_ref()
+					.map(|a| a.get("name").map(|v| v.as_str().map(String::from)))
+			})
+			.flatten()
+			.flatten()
+			.collect()
+	}
+
+	pub fn url(&self) -> String {
+		format!("https://mangadex.org/title/{}", self.id)
+	}
+
+	pub fn tags(&self) -> Vec<String> {
+		self.attributes
+			.tags
+			.iter()
+			.map(|t| t.attributes.name.get())
+			.flatten()
+			.collect()
+	}
+
+	pub fn status(&self) -> MangaStatus {
+		match self.attributes.status {
+			DexStatus::Ongoing => MangaStatus::Ongoing,
+			DexStatus::Completed => MangaStatus::Completed,
+			DexStatus::Hiatus => MangaStatus::Hiatus,
+			DexStatus::Cancelled => MangaStatus::Cancelled,
+		}
+	}
+
+	pub fn content_rating(&self) -> ContentRating {
+		match self.attributes.content_rating {
+			DexContentRating::Safe => ContentRating::Safe,
+			DexContentRating::Suggestive => ContentRating::Suggestive,
+			DexContentRating::Erotica | DexContentRating::Pornographic => ContentRating::NSFW,
+		}
+	}
+}
+
+impl<'a> DexChapter<'a> {
+	pub fn has_external_url(&self) -> bool {
+		self.attributes.external_url.is_some()
+	}
+
+	pub fn into_chapter(&self) -> Chapter {
+		let chapter_number = self
+			.attributes
+			.chapter
+			.map(|v| v.parse::<f32>().ok())
+			.flatten();
+		let volume_number = self
+			.attributes
+			.volume
+			.map(|v| v.parse::<f32>().ok())
+			.flatten();
+
+		// As per MangaDex upload guidelines, if the volume and chapter are both null or
+		// for serialized entries, the volume is 0 and chapter is null, it's a oneshot.
+		// They should have a title of "Oneshot" but some don't, so we'll add it if it's missing.
+		let title = if (volume_number.is_none() || volume_number == Some(0.0))
+			&& chapter_number.is_none()
+			&& self
+				.attributes
+				.title
+				.as_ref()
+				.map_or(true, |t| t.is_empty())
+		{
+			Some(String::from("Oneshot"))
+		} else {
+			self.attributes.title.clone()
+		};
+
+		Chapter {
+			key: String::from(self.id),
+			title,
+			chapter_number,
+			volume_number,
+			date_uploaded: DateTime::parse_from_rfc3339(self.attributes.publish_at)
+				.ok()
+				.map(|d| d.timestamp()),
+			scanlators: Some(self.scanlators()),
+			url: Some(self.url()),
+			language: Some(String::from(self.attributes.translated_language)),
+			..Default::default()
+		}
+	}
+
+	pub fn url(&self) -> String {
+		format!("https://mangadex.org/chapter/{}", self.id)
+	}
+
+	pub fn manga_id(&self) -> Option<&'a str> {
+		self.relationships.iter().find_map(|r| {
+			if r.r#type == "manga" {
+				Some(r.id)
+			} else {
+				None
+			}
+		})
+	}
+
+	pub fn scanlators(&self) -> Vec<String> {
+		let scanlation_groups: Vec<String> = self
+			.relationships
+			.iter()
+			.filter_map(|r| {
+				if r.r#type == "scanlation_group" {
+					r.attributes
+						.clone()
+						.map(|v| v.get("name").map(|v| v.as_str().map(String::from)))
+						.flatten()
+						.flatten()
+				} else {
+					None
+				}
+			})
+			.collect();
+		if scanlation_groups.is_empty() {
+			self.relationships
+				.iter()
+				.filter_map(|r| {
+					if r.r#type == "user" {
+						r.attributes
+							.clone()
+							.map(|v| v.get("username").map(|v| v.as_str().map(String::from)))
+							.flatten()
+							.flatten()
+					} else {
+						None
+					}
+				})
+				.collect()
+		} else {
+			scanlation_groups
+		}
+	}
+
+	// pub fn manga(&self) -> Option<DexManga> {
+	// 	self.relationships.iter().find_map(|r| {
+	// 		if r.r#type == "manga" {
+	// 			let attributes: Option<DexMangaAttributes> = r
+	// 				.attributes
+	// 				.clone()
+	// 				.map(serde_json::Value::Object)
+	// 				.map(serde_json::from_value)
+	// 				.map(|v| v.ok())
+	// 				.flatten();
+	// 			if let Some(attributes) = attributes {
+	// 				return Some(DexManga {
+	// 					id: r.id,
+	// 					attributes,
+	// 					relationships: Vec::new(),
+	// 				});
+	// 			}
+	// 		}
+	// 		None
+	// 	})
+	// }
+}

@@ -1,0 +1,623 @@
+#![no_std]
+
+use aidoku::{
+	alloc::{string::ToString, vec, String, Vec},
+	helpers::uri::QueryParameters,
+	imports::{
+		error::AidokuError,
+		net::{set_rate_limit, Request, TimeUnit},
+		std::send_partial_result,
+	},
+	prelude::*,
+	AlternateCoverProvider, Chapter, DeepLinkHandler, DeepLinkResult, DynamicListings, FilterValue,
+	Home, Listing, ListingKind, Manga, MangaPageResult, Page, PageContent, Result, Source,
+};
+use hashbrown::HashSet;
+
+mod auth;
+mod models;
+mod settings;
+
+mod home;
+
+use auth::*;
+use models::*;
+
+const API_URL: &str = "https://api.mangadex.org";
+const COVER_URL: &str = "https://uploads.mangadex.org";
+
+const PAGE_SIZE: i32 = 20;
+const CUSTOM_LIST_PREFIX: &str = "list-";
+
+// listings to use on the home page
+const CUSTOM_LISTS: &[&str] = &[
+	"f66ebc10-ef89-46d1-be96-bb704559e04a", // Self-Published
+	"805ba886-dd99-4aa4-b460-4bd7c7b71352", // Staff Picks
+	"5c5e6e39-0b4b-413e-be59-27b1ba03d1b9", // Featured by Supporters
+	"a5ba5473-07b2-4d0a-aefd-90d9d4a04521", // Seasonal
+];
+
+struct MangaDex;
+
+impl Source for MangaDex {
+	fn new() -> Self {
+		// 5 requests per second (https://api.mangadex.org/docs/2-limitations/)
+		set_rate_limit(5, 1, TimeUnit::Seconds);
+		Self
+	}
+
+	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
+		match listing.id.as_str() {
+			"recent" => self.get_search_manga_list(
+				None,
+				page,
+				vec![FilterValue::Sort {
+					id: String::default(),
+					index: 3,
+					ascending: false,
+				}],
+			),
+			"popular" => self.get_search_manga_list(
+				None,
+				page,
+				vec![FilterValue::Sort {
+					id: String::default(),
+					index: 2,
+					ascending: false,
+				}],
+			),
+			"latest" => self.get_latest_manga(page),
+			"library" => self.get_library(page),
+			_ if listing.id.starts_with(CUSTOM_LIST_PREFIX) => {
+				self.get_mangadex_list(&listing.id[CUSTOM_LIST_PREFIX.len()..])
+			}
+			_ => Err(AidokuError::Unimplemented),
+		}
+	}
+
+	fn get_search_manga_list(
+		&self,
+		query: Option<String>,
+		page: i32,
+		filters: Vec<FilterValue>,
+	) -> Result<MangaPageResult> {
+		let offset = (page - 1) * PAGE_SIZE;
+
+		let mut qs = QueryParameters::new();
+
+		let mut use_default_content_rating = true;
+		let mut has_available_chapters = true;
+
+		// parse filters
+		for filter in filters {
+			match filter {
+				FilterValue::Text { id, value } => match id.as_str() {
+					"author" | "artist" => {
+						let ids = self.get_author_ids(&value)?;
+						if let Some(first) = ids.first() {
+							qs.push("authorOrArtist", Some(first));
+						}
+					}
+					_ => return Err(AidokuError::Message("Invalid text filter id".into())),
+				},
+				FilterValue::Sort {
+					index, ascending, ..
+				} => {
+					let key = format!(
+						"order[{}]",
+						match index {
+							0 => "latestUploadedChapter",
+							1 => "relevance",
+							2 => "followedCount",
+							3 => "createdAt",
+							4 => "updatedAt",
+							5 => "title",
+							_ =>
+								return Err(AidokuError::Message(
+									"Invalid sort filter index".into()
+								)),
+						}
+					);
+					qs.push(&key, Some(if ascending { "asc" } else { "desc" }));
+				}
+				FilterValue::MultiSelect {
+					id,
+					included,
+					excluded,
+				} => match id.as_str() {
+					"lang" => {
+						for id in included {
+							id.split(",").for_each(|lang| {
+								qs.push("originalLanguage[]", Some(lang));
+							});
+						}
+						for id in excluded {
+							id.split(",").for_each(|lang| {
+								qs.push("excludedOriginalLanguage[]", Some(lang));
+							});
+						}
+					}
+					"rating" => {
+						use_default_content_rating = false;
+						for id in included {
+							qs.push("contentRating[]", Some(&id));
+						}
+					}
+					"status" => {
+						for id in included {
+							qs.push("status[]", Some(&id));
+						}
+					}
+					"demographic" => {
+						for id in included {
+							qs.push("publicationDemographic[]", Some(&id));
+						}
+					}
+					_ => {
+						for id in included {
+							qs.push("includedTags[]", Some(&id));
+						}
+						for id in excluded {
+							qs.push("excludedTags[]", Some(&id));
+						}
+					}
+				},
+				// has available chapters toggle
+				FilterValue::Check { value, .. } => match value {
+					0 => has_available_chapters = false,
+					_ => continue,
+				},
+				// includedTagsMode and excludedTagsMode
+				FilterValue::Select { id, value } => {
+					qs.push(
+						&id,
+						Some(match value {
+							0 => "AND",
+							1 => "OR",
+							_ => "AND",
+						}),
+					);
+				}
+			}
+		}
+
+		if let Some(query) = query {
+			qs.push("title", Some(&query));
+		}
+
+		if use_default_content_rating {
+			let default_ratings = settings::get_content_ratings_list()?;
+			for rating in default_ratings {
+				qs.push("contentRating[]", Some(&rating));
+			}
+		}
+
+		if has_available_chapters {
+			qs.push("hasAvailableChapters", Some("true"));
+			let languages = settings::get_languages()?;
+			for lang in languages {
+				qs.push("availableTranslatedLanguage[]", Some(&lang));
+			}
+		}
+
+		let url = format!(
+			"{API_URL}/manga\
+				?includes%5B%5D=cover_art\
+				&limit={PAGE_SIZE}\
+				&offset={offset}\
+				&{qs}",
+		);
+
+		let (entries, has_next_page) = Request::get(url)?
+			.json::<DexResponse<Vec<DexManga>>>()
+			.map(|response| {
+				(
+					response
+						.data
+						.iter()
+						.map(|value| value.into_basic_manga())
+						.collect::<Vec<Manga>>(),
+					response.total.map_or(false, |t| offset + PAGE_SIZE < t),
+				)
+			})?;
+
+		Ok(MangaPageResult {
+			entries,
+			has_next_page,
+		})
+	}
+
+	fn get_manga_update(
+		&self,
+		mut manga: Manga,
+		needs_details: bool,
+		needs_chapters: bool,
+	) -> Result<Manga> {
+		if needs_details {
+			manga.copy_from(
+				Request::get(format!(
+					"{API_URL}/manga/{}\
+						?includes[]=cover_art\
+						&includes[]=author\
+						&includes[]=artist",
+					manga.key
+				))?
+				.json::<DexResponse<DexManga>>()?
+				.data
+				.into_manga(),
+			);
+			if needs_chapters {
+				send_partial_result(&manga);
+			}
+		}
+
+		if needs_chapters {
+			let languages = settings::get_languages_with_key("translatedLanguage")?;
+			let blocked_groups = settings::get_blocked_uuids()?;
+
+			let url = format!(
+				"{API_URL}/manga/{}/feed\
+					?order[volume]=desc\
+					&order[chapter]=desc\
+					&limit=500\
+					&contentRating[]=pornographic\
+					&contentRating[]=erotica\
+					&contentRating[]=suggestive\
+					&contentRating[]=safe\
+					&includes[]=user\
+					&includes[]=scanlation_group\
+					{languages}\
+					{blocked_groups}",
+				manga.key
+			);
+
+			let (mut chapters, total) = Request::get(&url)?
+				.json::<DexResponse<Vec<DexChapter>>>()
+				.map(|response| {
+					(
+						response
+							.data
+							.iter()
+							.filter(|value| !value.has_external_url())
+							.map(|value| value.into_chapter())
+							.collect::<Vec<Chapter>>(),
+						response.total,
+					)
+				})?;
+
+			// fetch chapters in pages of 500
+			if let Some(total) = total {
+				let mut offset = 500;
+				while offset < total {
+					let url = format!("{url}&offset={offset}");
+					if let Ok(response) = Request::get(&url)?.json::<DexResponse<Vec<DexChapter>>>()
+					{
+						chapters.extend(
+							response
+								.data
+								.iter()
+								.filter(|value| !value.has_external_url())
+								.map(|value| value.into_chapter()),
+						);
+					}
+					offset += 500;
+				}
+			}
+
+			manga.chapters = Some(chapters);
+		}
+
+		Ok(manga)
+	}
+
+	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		let force_port = settings::get_force_port();
+		let url = format!(
+			"{API_URL}/at-home/server/{}{}",
+			chapter.key,
+			if force_port { "?forcePort443=true" } else { "" }
+		);
+
+		Request::get(&url)?
+			.json::<DexAtHomeResponse>()
+			.and_then(|response| {
+				let data_saver = settings::get_data_saver();
+				let base_url = format!(
+					"{}/{}/{}",
+					response.base_url,
+					if data_saver { "dataSaver" } else { "data" },
+					response.chapter.hash
+				);
+
+				let chapter_data = if data_saver {
+					response.chapter.data_saver
+				} else {
+					response.chapter.data
+				};
+				chapter_data
+					.map(|data| {
+						data.iter()
+							.map(|value| Page {
+								content: PageContent::url(format!("{base_url}/{}", value)),
+								..Default::default()
+							})
+							.collect::<Vec<Page>>()
+					})
+					.ok_or(AidokuError::message("Missing chapter data"))
+			})
+	}
+}
+
+impl MangaDex {
+	// get a list of author ids from a name query
+	fn get_author_ids(&self, name: &str) -> Result<Vec<String>> {
+		let url = format!("{API_URL}/author?name={name}",);
+
+		let ids = Request::get(url)?
+			.json::<DexResponse<Vec<DexData>>>()?
+			.data
+			.iter()
+			.map(|value| value.id.to_string())
+			.collect::<Vec<String>>();
+
+		Ok(ids)
+	}
+
+	// get a custom list
+	fn get_mangadex_list(&self, id: &str) -> Result<MangaPageResult> {
+		let content_ratings = settings::get_content_ratings()?;
+
+		let mut list_req = Request::get(format!("{API_URL}/list/{id}"))?;
+
+		let manga_ids = list_req
+			.json::<DexResponse<DexCustomList>>()?
+			.data
+			.relationships
+			.iter()
+			.filter_map(|relationship| {
+				if relationship.r#type == "manga" {
+					Some(relationship.id)
+				} else {
+					None
+				}
+			})
+			.collect::<Vec<&str>>();
+
+		// assume the list is 32 items or less (mangadex site uses this value)
+		let entries = Request::get(format!(
+			"{API_URL}/manga\
+					?limit=32\
+					&includes[]=cover_art\
+					{content_ratings}\
+					&ids[]={}",
+			manga_ids.join("&ids[]=")
+		))?
+		.json::<DexResponse<Vec<DexManga>>>()
+		.map(|response| {
+			response
+				.data
+				.iter()
+				.map(|value| value.into_basic_manga())
+				.collect::<Vec<Manga>>()
+		})?;
+
+		Ok(MangaPageResult {
+			entries,
+			has_next_page: false,
+		})
+	}
+
+	// get the manga associated with the latest uploaded chapters
+	fn get_latest_manga(&self, page: i32) -> Result<MangaPageResult> {
+		let languages = settings::get_languages_with_key("translatedLanguage")?;
+		let content_ratings = settings::get_content_ratings()?;
+
+		let offset = (page - 1) * PAGE_SIZE;
+
+		let chapters_data = Request::get(format!(
+			"{API_URL}/chapter\
+				?includes[]=scanlation_group\
+				&limit={PAGE_SIZE}\
+				&offset={offset}\
+				&order[readableAt]=desc\
+				{content_ratings}\
+				{languages}"
+		))?
+		.get_data()?; // get_data instead of json so that we can use it as a reference
+
+		// get unique manga ids for the chapters
+		let mut seen = HashSet::new();
+		let manga_ids: Vec<&str> =
+			serde_json::from_slice::<DexResponse<Vec<DexChapter>>>(&chapters_data)
+				.map_err(|_| AidokuError::JsonParseError)?
+				.data
+				.into_iter()
+				.filter_map(|chapter| chapter.manga_id())
+				.filter(|&id| seen.insert(id))
+				.collect();
+
+		let has_next_page = manga_ids.len() != 0;
+
+		let ids_params = manga_ids
+			.iter()
+			.map(|id| format!("&ids[]={}", id))
+			.collect::<String>();
+
+		let url = format!(
+			"{API_URL}/manga\
+				?includes[]=cover_art\
+				{content_ratings}\
+				{ids_params}"
+		);
+		let entries = Request::get(url)?
+			.json::<DexResponse<Vec<DexManga>>>()?
+			.data
+			.iter()
+			.map(|value| value.into_basic_manga())
+			.collect::<Vec<Manga>>();
+
+		Ok(MangaPageResult {
+			entries,
+			has_next_page,
+		})
+	}
+
+	// get the logged in user's library
+	fn get_library(&self, page: i32) -> Result<MangaPageResult> {
+		let status_ids = auth_request::<DexStatusResponse>(&mut Request::get(format!(
+			"{API_URL}/manga/status"
+		))?)?
+		.statuses
+		.keys()
+		.map(|id| format!("&ids[]={id}"))
+		.collect::<String>();
+
+		let offset = (page - 1) * PAGE_SIZE;
+
+		let manga_url = format!(
+			"{API_URL}/manga?\
+				&limit={PAGE_SIZE}\
+				&offset={offset}\
+				&includes[]=cover_art\
+				&contentRating[]=safe\
+				&contentRating[]=suggestive\
+				&contentRating[]=erotica\
+				&contentRating[]=pornographic\
+				{status_ids}",
+		);
+
+		let (entries, has_next_page) = auth_request::<DexResponse<Vec<DexManga>>>(
+			&mut Request::get(manga_url)?,
+		)
+		.map(|response| {
+			(
+				response
+					.data
+					.iter()
+					.map(|value| value.into_basic_manga())
+					.collect::<Vec<Manga>>(),
+				response.total.map_or(false, |t| offset + PAGE_SIZE < t),
+			)
+		})?;
+
+		Ok(MangaPageResult {
+			entries,
+			has_next_page,
+		})
+	}
+}
+
+// show the library listing if we're logged in
+impl DynamicListings for MangaDex {
+	fn get_dynamic_listings(&self) -> Result<Vec<Listing>> {
+		if settings::is_logged_in() {
+			Ok(Vec::from([Listing {
+				id: String::from("library"),
+				name: String::from("Library"),
+				kind: ListingKind::Default,
+			}]))
+		} else {
+			Ok(Vec::new())
+		}
+	}
+}
+
+impl AlternateCoverProvider for MangaDex {
+	fn get_alternate_covers(&self, manga: Manga) -> Result<Vec<String>> {
+		let locales = settings::get_languages_with_key("locales")?;
+
+		let url = format!(
+			"{API_URL}/cover?manga[]={}{}{}&limit=100",
+			manga.key,
+			locales,
+			if !locales.contains("locales[]=ja") {
+				"&locales[]=ja"
+			} else {
+				""
+			}
+		);
+		let (mut items, total) = Request::get(&url)?
+			.json::<DexResponse<Vec<DexCoverArt>>>()
+			.map(|response| (response.data, response.total))?;
+
+		if let Some(total) = total {
+			let mut offset = 100;
+			while offset < total {
+				let url = format!("{url}&offset={offset}");
+				if let Ok(response) = Request::get(url)?.json::<DexResponse<Vec<DexCoverArt>>>() {
+					items.extend(response.data);
+				}
+				offset += 100;
+			}
+		}
+
+		let result = items
+			.iter()
+			.map(|item| {
+				format!(
+					"{COVER_URL}/covers/{}/{}{}",
+					manga.key,
+					item.attributes.file_name,
+					settings::get_cover_quality()
+				)
+			})
+			.collect::<Vec<String>>();
+
+		Ok(result)
+	}
+}
+
+impl DeepLinkHandler for MangaDex {
+	fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
+		const BASE_URL: &str = "https://mangadex.org/";
+
+		if !url.starts_with(BASE_URL) {
+			return Ok(None);
+		}
+
+		let url = &url[BASE_URL.len()..]; // remove base url prefix
+
+		const TITLE_PATH: &str = "title/";
+		const CHAPTER_PATH: &str = "chapter/";
+
+		if url.starts_with(TITLE_PATH) {
+			// ex: https://mangadex.org/title/a96676e5-8ae2-425e-b549-7f15dd34a6d8/komi-san-wa-komyushou-desu
+			let id = &url[TITLE_PATH.len()..]; // remove "title/"
+			let end = id.find('/').unwrap_or(id.len());
+			let manga_id = &id[..end];
+
+			Ok(Some(DeepLinkResult::Manga {
+				id: manga_id.into(),
+			}))
+		} else if url.starts_with(CHAPTER_PATH) {
+			// ex: https://mangadex.org/chapter/56eecc6f-1a4e-464c-b6a4-a1cbdfdfd726/1
+			let id = &url[CHAPTER_PATH.len()..]; // remove "chapter/"
+			let end = id.find('/').unwrap_or(id.len());
+			let chapter_id = &id[..end];
+
+			let url = format!("{API_URL}/chapter/{chapter_id}");
+			let mut request = Request::get(&url)?;
+			let json = request.json::<DexResponse<DexChapter>>()?;
+
+			let manga_id = json
+				.data
+				.manga_id()
+				.ok_or(AidokuError::message("Missing manga id"))?;
+
+			Ok(Some(DeepLinkResult::Chapter {
+				manga_id: manga_id.into(),
+				id: chapter_id.into(),
+			}))
+		} else {
+			Ok(None)
+		}
+	}
+}
+
+register_source!(
+	MangaDex,
+	Home,
+	DynamicListings,
+	AlternateCoverProvider,
+	DeepLinkHandler
+);
