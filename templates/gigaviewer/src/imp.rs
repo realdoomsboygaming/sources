@@ -299,12 +299,12 @@ pub trait Impl {
 
 		if path.starts_with(EPISODE_PATH) {
 			// ex: https://shonenjumpplus.com/episode/10834108156648240735
-			let id = &path[EPISODE_PATH.len()..]; // remove "episode/"
+			let key = &path[EPISODE_PATH.len()..]; // remove "episode/"
 
-			// the manga id can be any of the chapter ids
+			// the manga key can be any of the chapter keys
 			Ok(Some(DeepLinkResult::Chapter {
-				manga_id: id.into(),
-				id: id.into(),
+				manga_key: key.into(),
+				key: key.into(),
 			}))
 		} else {
 			Ok(None)

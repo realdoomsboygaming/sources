@@ -582,31 +582,31 @@ impl DeepLinkHandler for MangaDex {
 
 		if url.starts_with(TITLE_PATH) {
 			// ex: https://mangadex.org/title/a96676e5-8ae2-425e-b549-7f15dd34a6d8/komi-san-wa-komyushou-desu
-			let id = &url[TITLE_PATH.len()..]; // remove "title/"
-			let end = id.find('/').unwrap_or(id.len());
-			let manga_id = &id[..end];
+			let key = &url[TITLE_PATH.len()..]; // remove "title/"
+			let end = key.find('/').unwrap_or(key.len());
+			let manga_key = &key[..end];
 
 			Ok(Some(DeepLinkResult::Manga {
-				id: manga_id.into(),
+				key: manga_key.into(),
 			}))
 		} else if url.starts_with(CHAPTER_PATH) {
 			// ex: https://mangadex.org/chapter/56eecc6f-1a4e-464c-b6a4-a1cbdfdfd726/1
-			let id = &url[CHAPTER_PATH.len()..]; // remove "chapter/"
-			let end = id.find('/').unwrap_or(id.len());
-			let chapter_id = &id[..end];
+			let key = &url[CHAPTER_PATH.len()..]; // remove "chapter/"
+			let end = key.find('/').unwrap_or(key.len());
+			let chapter_key = &key[..end];
 
-			let url = format!("{API_URL}/chapter/{chapter_id}");
+			let url = format!("{API_URL}/chapter/{chapter_key}");
 			let mut request = Request::get(&url)?;
 			let json = request.json::<DexResponse<DexChapter>>()?;
 
-			let manga_id = json
+			let manga_key = json
 				.data
 				.manga_id()
 				.ok_or(AidokuError::message("Missing manga id"))?;
 
 			Ok(Some(DeepLinkResult::Chapter {
-				manga_id: manga_id.into(),
-				id: chapter_id.into(),
+				manga_key: manga_key.into(),
+				key: chapter_key.into(),
 			}))
 		} else {
 			Ok(None)
