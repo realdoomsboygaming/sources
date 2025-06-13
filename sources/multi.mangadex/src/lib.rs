@@ -1,5 +1,4 @@
 #![no_std]
-
 use aidoku::{
 	alloc::{string::ToString, vec, String, Vec},
 	helpers::uri::QueryParameters,
@@ -12,6 +11,7 @@ use aidoku::{
 	AlternateCoverProvider, Chapter, DeepLinkHandler, DeepLinkResult, DynamicListings, FilterValue,
 	Home, Listing, ListingKind, Manga, MangaPageResult, Page, PageContent, Result, Source,
 };
+use core::fmt::Write;
 use hashbrown::HashSet;
 
 mod auth;
@@ -214,10 +214,10 @@ impl Source for MangaDex {
 				(
 					response
 						.data
-						.iter()
+						.into_iter()
 						.map(|value| value.into_basic_manga())
 						.collect::<Vec<Manga>>(),
-					response.total.map_or(false, |t| offset + PAGE_SIZE < t),
+					response.total.is_some_and(|t| offset + PAGE_SIZE < t),
 				)
 			})?;
 
@@ -244,7 +244,7 @@ impl Source for MangaDex {
 				))?
 				.json::<DexResponse<DexManga>>()?
 				.data
-				.into_manga(),
+				.into(),
 			);
 			if needs_chapters {
 				send_partial_result(&manga);
@@ -277,9 +277,9 @@ impl Source for MangaDex {
 					(
 						response
 							.data
-							.iter()
+							.into_iter()
 							.filter(|value| !value.has_external_url())
-							.map(|value| value.into_chapter())
+							.map(|value| value.into())
 							.collect::<Vec<Chapter>>(),
 						response.total,
 					)
@@ -295,9 +295,9 @@ impl Source for MangaDex {
 						chapters.extend(
 							response
 								.data
-								.iter()
+								.into_iter()
 								.filter(|value| !value.has_external_url())
-								.map(|value| value.into_chapter()),
+								.map(|value| value.into()),
 						);
 					}
 					offset += 500;
@@ -396,7 +396,7 @@ impl MangaDex {
 		.map(|response| {
 			response
 				.data
-				.iter()
+				.into_iter()
 				.map(|value| value.into_basic_manga())
 				.collect::<Vec<Manga>>()
 		})?;
@@ -436,12 +436,12 @@ impl MangaDex {
 				.filter(|&id| seen.insert(id))
 				.collect();
 
-		let has_next_page = manga_ids.len() != 0;
+		let has_next_page = !manga_ids.is_empty();
 
-		let ids_params = manga_ids
-			.iter()
-			.map(|id| format!("&ids[]={}", id))
-			.collect::<String>();
+		let ids_params = manga_ids.iter().fold(String::new(), |mut output, id| {
+			let _ = write!(output, "&ids[]={id}");
+			output
+		});
 
 		let url = format!(
 			"{API_URL}/manga\
@@ -452,7 +452,7 @@ impl MangaDex {
 		let entries = Request::get(url)?
 			.json::<DexResponse<Vec<DexManga>>>()?
 			.data
-			.iter()
+			.into_iter()
 			.map(|value| value.into_basic_manga())
 			.collect::<Vec<Manga>>();
 
@@ -469,8 +469,10 @@ impl MangaDex {
 		))?)?
 		.statuses
 		.keys()
-		.map(|id| format!("&ids[]={id}"))
-		.collect::<String>();
+		.fold(String::new(), |mut output, id| {
+			let _ = write!(output, "&ids[]={id}");
+			output
+		});
 
 		let offset = (page - 1) * PAGE_SIZE;
 
@@ -493,10 +495,10 @@ impl MangaDex {
 			(
 				response
 					.data
-					.iter()
+					.into_iter()
 					.map(|value| value.into_basic_manga())
 					.collect::<Vec<Manga>>(),
-				response.total.map_or(false, |t| offset + PAGE_SIZE < t),
+				response.total.is_some_and(|t| offset + PAGE_SIZE < t),
 			)
 		})?;
 
@@ -580,18 +582,16 @@ impl DeepLinkHandler for MangaDex {
 		const TITLE_PATH: &str = "title/";
 		const CHAPTER_PATH: &str = "chapter/";
 
-		if url.starts_with(TITLE_PATH) {
+		if let Some(key) = url.strip_prefix(TITLE_PATH) {
 			// ex: https://mangadex.org/title/a96676e5-8ae2-425e-b549-7f15dd34a6d8/komi-san-wa-komyushou-desu
-			let key = &url[TITLE_PATH.len()..]; // remove "title/"
 			let end = key.find('/').unwrap_or(key.len());
 			let manga_key = &key[..end];
 
 			Ok(Some(DeepLinkResult::Manga {
 				key: manga_key.into(),
 			}))
-		} else if url.starts_with(CHAPTER_PATH) {
-			// ex: https://mangadex.org/chapter/56eecc6f-1a4e-464c-b6a4-a1cbdfdfd726/1
-			let key = &url[CHAPTER_PATH.len()..]; // remove "chapter/"
+		} else if let Some(key) = url.strip_prefix(CHAPTER_PATH) {
+			// ex: https://mangadex.org/chapter/56eecc6f-1a4e-464c-b6a4-a1cbdf
 			let end = key.find('/').unwrap_or(key.len());
 			let chapter_key = &key[..end];
 
@@ -602,7 +602,7 @@ impl DeepLinkHandler for MangaDex {
 			let manga_key = json
 				.data
 				.manga_id()
-				.ok_or(AidokuError::message("Missing manga id"))?;
+				.ok_or(AidokuError::message("Missing manga key"))?;
 
 			Ok(Some(DeepLinkResult::Chapter {
 				manga_key: manga_key.into(),

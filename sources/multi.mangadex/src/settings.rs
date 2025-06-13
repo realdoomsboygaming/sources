@@ -1,14 +1,13 @@
+use crate::TokenResponse;
 use aidoku::{
 	alloc::{string::String, vec::Vec},
 	imports::{
 		defaults::{defaults_get, defaults_get_json, defaults_set, DefaultValue},
 		error::AidokuError,
 	},
-	prelude::*,
 	Result,
 };
-
-use crate::TokenResponse;
+use core::fmt::Write;
 
 // settings keys
 const LANGUAGES_KEY: &str = "languages";
@@ -29,8 +28,10 @@ pub fn get_languages_with_key(key: &str) -> Result<String> {
 	Ok(defaults_get::<Vec<String>>(LANGUAGES_KEY)
 		.ok_or(AidokuError::message("Unable to fetch languages"))?
 		.iter()
-		.map(|lang| format!("&{key}[]={lang}"))
-		.collect::<String>())
+		.fold(String::new(), |mut output, lang| {
+			let _ = write!(output, "&{key}[]={lang}");
+			output
+		}))
 }
 
 pub fn get_content_ratings() -> Result<String> {
@@ -39,8 +40,10 @@ pub fn get_content_ratings() -> Result<String> {
 			"Unable to fetch default content ratings",
 		))?
 		.iter()
-		.map(|value| format!("&contentRating[]={}", value))
-		.collect::<String>())
+		.fold(String::new(), |mut output, value| {
+			let _ = write!(output, "&contentRating[]={value}");
+			output
+		}))
 }
 
 pub fn get_content_ratings_list() -> Result<Vec<String>> {
@@ -53,8 +56,13 @@ pub fn get_blocked_uuids() -> Result<String> {
 	Ok(defaults_get::<Vec<String>>(BLOCKED_UUIDS_KEY)
 		.unwrap_or_default()
 		.iter()
-		.map(|value| format!("&excludedGroups[]={value}&excludedUploaders[]={value}"))
-		.collect::<String>())
+		.fold(String::new(), |mut output, value| {
+			let _ = write!(
+				output,
+				"&excludedGroups[]={value}&excludedUploaders[]={value}"
+			);
+			output
+		}))
 }
 
 pub fn get_force_port() -> bool {

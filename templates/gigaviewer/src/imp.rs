@@ -186,12 +186,10 @@ pub trait Impl {
 			.pages
 			.iter()
 			.filter_map(|page| {
-				if page.r#type.as_ref().map_or(true, |t| t != "main") {
+				if page.r#type.as_ref().is_none_or(|t| t != "main") {
 					return None;
 				}
-				let Some(ref src) = page.src else {
-					return None;
-				};
+				let src = page.src.as_ref()?;
 				let mut context = PageContext::new();
 				context.insert(String::from("width"), page.width.unwrap_or(0).to_string());
 				context.insert(String::from("height"), page.height.unwrap_or(0).to_string());
@@ -286,10 +284,8 @@ pub trait Impl {
 
 		const EPISODE_PATH: &str = "episode/";
 
-		if path.starts_with(EPISODE_PATH) {
+		if let Some(key) = path.strip_prefix(EPISODE_PATH) {
 			// ex: https://shonenjumpplus.com/episode/10834108156648240735
-			let key = &path[EPISODE_PATH.len()..]; // remove "episode/"
-
 			// the manga key can be any of the chapter keys
 			Ok(Some(DeepLinkResult::Chapter {
 				manga_key: key.into(),

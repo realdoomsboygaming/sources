@@ -9,6 +9,7 @@ use aidoku::{
 	Chapter, Manga,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn parse_response<T: AsRef<str>>(
 	html: &Document,
 	base_url: &str,
@@ -89,7 +90,7 @@ pub fn parse_chapter_elements(
 					let title = info
 						.select_first("h4.series-episode-list-title")
 						.and_then(|e| e.text());
-					let chapter_number = title.clone().and_then(|str| parse_chapter_number(str));
+					let chapter_number = title.clone().and_then(parse_chapter_number);
 					let thumbnail = info
 						.select_first(".series-episode-list-thumb-container img")
 						.and_then(|e| e.attr("src"));

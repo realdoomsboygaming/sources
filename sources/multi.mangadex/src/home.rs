@@ -155,7 +155,7 @@ impl Home for MangaDex {
 				.json::<DexResponse<Vec<DexManga>>>()
 				.map_err(|_| AidokuError::message("Failed to parse recent manga"))?
 				.data
-				.iter()
+				.into_iter()
 				.map(|value| value.into_basic_manga().into())
 				.collect::<Vec<Link>>();
 
@@ -196,8 +196,7 @@ impl Home for MangaDex {
 
 			let manga_ids = chapters
 				.iter()
-				.map(|value| value.manga_id().map(|m| format!("&ids[]={}", m)))
-				.flatten()
+				.filter_map(|value| value.manga_id().map(|m| format!("&ids[]={}", m)))
 				.collect::<String>();
 
 			let latest_manga_url = format!(
@@ -209,19 +208,19 @@ impl Home for MangaDex {
 			let latest_manga = Request::get(latest_manga_url)?
 				.json::<DexResponse<Vec<DexManga>>>()?
 				.data
-				.iter()
+				.into_iter()
 				.map(|value| value.into_basic_manga())
 				.collect::<Vec<Manga>>();
 
 			let latest_chapters = chapters
-				.iter()
+				.into_iter()
 				.map(|value| MangaWithChapter {
 					manga: latest_manga
 						.iter()
 						.find(|m| m.key == value.manga_id().expect("need manga"))
 						.expect("need manga!")
 						.clone(),
-					chapter: value.into_chapter(),
+					chapter: value.into(),
 				})
 				.collect::<Vec<MangaWithChapter>>();
 
@@ -254,7 +253,7 @@ impl Home for MangaDex {
 				.unwrap()
 			}));
 			let custom_lists = custom_lists
-				.into_iter()
+				.iter_mut()
 				.zip(custom_list_requests)
 				.filter_map(|(list, req)| {
 					Some((
@@ -265,7 +264,7 @@ impl Home for MangaDex {
 							.map(|response| {
 								response
 									.data
-									.iter()
+									.into_iter()
 									.map(|value| value.into_basic_manga().into())
 									.collect::<Vec<Link>>()
 							})

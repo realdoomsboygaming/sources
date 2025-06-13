@@ -84,32 +84,24 @@ pub struct DexManga<'a> {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum DexContentRating {
+	#[default]
 	Safe,
 	Suggestive,
 	Erotica,
 	Pornographic,
 }
 
-impl Default for DexContentRating {
-	fn default() -> Self {
-		DexContentRating::Safe
-	}
-}
-
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum DexStatus {
 	Completed,
+	#[default]
 	Ongoing,
 	Cancelled,
 	Hiatus,
-}
-
-impl Default for DexStatus {
-	fn default() -> Self {
-		DexStatus::Ongoing
-	}
 }
 
 #[derive(Default, Deserialize, Debug, Clone)]
@@ -174,47 +166,18 @@ impl DexLocalizedString {
 			Some(en.clone())
 		} else if let Some(ja_ro) = &self.ja_ro {
 			Some(ja_ro.clone())
-		} else if let Some(ja) = &self.ja {
-			Some(ja.clone())
 		} else {
-			None
+			self.ja.clone()
 		}
 	}
 }
 
 impl DexManga<'_> {
-	pub fn into_basic_manga(&self) -> Manga {
+	pub fn into_basic_manga(self) -> Manga {
 		Manga {
 			key: String::from(self.id),
 			title: self.title().unwrap_or_default(),
 			cover: self.cover(),
-			..Default::default()
-		}
-	}
-
-	pub fn into_manga(&self) -> Manga {
-		let tags = self.tags();
-		let viewer = if tags.iter().any(|t| t == "Long Strip") {
-			Viewer::Webtoon
-		} else {
-			match self.attributes.original_language.as_str() {
-				"ja" => Viewer::RightToLeft,
-				"zh" | "ko" => Viewer::Webtoon,
-				_ => Viewer::RightToLeft,
-			}
-		};
-		Manga {
-			key: String::from(self.id),
-			title: self.title().unwrap_or_default(),
-			cover: self.cover(),
-			artists: Some(self.artists()),
-			authors: Some(self.authors()),
-			description: self.description(),
-			url: Some(self.url()),
-			tags: Some(tags),
-			status: self.status(),
-			content_rating: self.content_rating(),
-			viewer,
 			..Default::default()
 		}
 	}
@@ -235,8 +198,7 @@ impl DexManga<'_> {
 					self.id,
 					r.attributes
 						.clone()
-						.map(|v| v.get("fileName").map(|v| v.as_str().map(String::from)))
-						.flatten()
+						.and_then(|v| v.get("fileName").map(|v| v.as_str().map(String::from)))
 						.flatten()
 						.unwrap_or_default(),
 					settings::get_cover_quality()
@@ -283,8 +245,7 @@ impl DexManga<'_> {
 		self.attributes
 			.tags
 			.iter()
-			.map(|t| t.attributes.name.get())
-			.flatten()
+			.filter_map(|t| t.attributes.name.get())
 			.collect()
 	}
 
@@ -306,52 +267,38 @@ impl DexManga<'_> {
 	}
 }
 
+impl From<DexManga<'_>> for Manga {
+	fn from(val: DexManga<'_>) -> Self {
+		let tags = val.tags();
+		let viewer = if tags.iter().any(|t| t == "Long Strip") {
+			Viewer::Webtoon
+		} else {
+			match val.attributes.original_language.as_str() {
+				"ja" => Viewer::RightToLeft,
+				"zh" | "ko" => Viewer::Webtoon,
+				_ => Viewer::RightToLeft,
+			}
+		};
+		Manga {
+			key: String::from(val.id),
+			title: val.title().unwrap_or_default(),
+			cover: val.cover(),
+			artists: Some(val.artists()),
+			authors: Some(val.authors()),
+			description: val.description(),
+			url: Some(val.url()),
+			tags: Some(tags),
+			status: val.status(),
+			content_rating: val.content_rating(),
+			viewer,
+			..Default::default()
+		}
+	}
+}
+
 impl<'a> DexChapter<'a> {
 	pub fn has_external_url(&self) -> bool {
 		self.attributes.external_url.is_some()
-	}
-
-	pub fn into_chapter(&self) -> Chapter {
-		let chapter_number = self
-			.attributes
-			.chapter
-			.map(|v| v.parse::<f32>().ok())
-			.flatten();
-		let volume_number = self
-			.attributes
-			.volume
-			.map(|v| v.parse::<f32>().ok())
-			.flatten();
-
-		// As per MangaDex upload guidelines, if the volume and chapter are both null or
-		// for serialized entries, the volume is 0 and chapter is null, it's a oneshot.
-		// They should have a title of "Oneshot" but some don't, so we'll add it if it's missing.
-		let title = if (volume_number.is_none() || volume_number == Some(0.0))
-			&& chapter_number.is_none()
-			&& self
-				.attributes
-				.title
-				.as_ref()
-				.map_or(true, |t| t.is_empty())
-		{
-			Some(String::from("Oneshot"))
-		} else {
-			self.attributes.title.clone()
-		};
-
-		Chapter {
-			key: String::from(self.id),
-			title,
-			chapter_number,
-			volume_number,
-			date_uploaded: DateTime::parse_from_rfc3339(self.attributes.publish_at)
-				.ok()
-				.map(|d| d.timestamp()),
-			scanlators: Some(self.scanlators()),
-			url: Some(self.url()),
-			language: Some(String::from(self.attributes.translated_language)),
-			..Default::default()
-		}
 	}
 
 	pub fn url(&self) -> String {
@@ -376,8 +323,7 @@ impl<'a> DexChapter<'a> {
 				if r.r#type == "scanlation_group" {
 					r.attributes
 						.clone()
-						.map(|v| v.get("name").map(|v| v.as_str().map(String::from)))
-						.flatten()
+						.and_then(|v| v.get("name").map(|v| v.as_str().map(String::from)))
 						.flatten()
 				} else {
 					None
@@ -391,8 +337,7 @@ impl<'a> DexChapter<'a> {
 					if r.r#type == "user" {
 						r.attributes
 							.clone()
-							.map(|v| v.get("username").map(|v| v.as_str().map(String::from)))
-							.flatten()
+							.and_then(|v| v.get("username").map(|v| v.as_str().map(String::from)))
 							.flatten()
 					} else {
 						None
@@ -425,4 +370,37 @@ impl<'a> DexChapter<'a> {
 	// 		None
 	// 	})
 	// }
+}
+
+impl From<DexChapter<'_>> for Chapter {
+	fn from(val: DexChapter<'_>) -> Self {
+		let chapter_number = val.attributes.chapter.and_then(|v| v.parse::<f32>().ok());
+		let volume_number = val.attributes.volume.and_then(|v| v.parse::<f32>().ok());
+
+		// As per MangaDex upload guidelines, if the volume and chapter are both null or
+		// for serialized entries, the volume is 0 and chapter is null, it's a oneshot.
+		// They should have a title of "Oneshot" but some don't, so we'll add it if it's missing.
+		let title = if (volume_number.is_none() || volume_number == Some(0.0))
+			&& chapter_number.is_none()
+			&& val.attributes.title.as_ref().is_none_or(|t| t.is_empty())
+		{
+			Some(String::from("Oneshot"))
+		} else {
+			val.attributes.title.clone()
+		};
+
+		Chapter {
+			key: String::from(val.id),
+			title,
+			chapter_number,
+			volume_number,
+			date_uploaded: DateTime::parse_from_rfc3339(val.attributes.publish_at)
+				.ok()
+				.map(|d| d.timestamp()),
+			scanlators: Some(val.scanlators()),
+			url: Some(val.url()),
+			language: Some(String::from(val.attributes.translated_language)),
+			..Default::default()
+		}
+	}
 }

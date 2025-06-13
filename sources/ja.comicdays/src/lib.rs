@@ -26,9 +26,9 @@ impl Impl for ComicDays {
 
 	fn get_manga_list(
 		&self,
-		params: &Params,
+		_params: &Params,
 		listing: Listing,
-		page: i32,
+		_page: i32,
 	) -> Result<MangaPageResult> {
 		let item_selector: &str;
 		let title_selector: &str;
@@ -51,7 +51,7 @@ impl Impl for ComicDays {
 				cover_attr = "src";
 				authors_selector = Some(".yomikiri-link-title h5");
 			}
-			_ => return Impl::get_manga_list(self, params, listing, page),
+			_ => return Impl::get_manga_list(self, _params, listing, _page),
 		}
 
 		let base_url = self.params().base_url;
@@ -75,12 +75,12 @@ impl Impl for ComicDays {
 	}
 
 	fn get_home(&self, _params: &Params) -> Result<HomeLayout> {
-		let html = Request::get(&BASE_URL)?.html()?;
+		let html = Request::get(BASE_URL)?.html()?;
 
 		fn parse_home_section(html: &Document, item_selector: &str) -> Vec<Link> {
 			gigaviewer::parser::parse_response(
-				&html,
-				&BASE_URL,
+				html,
+				BASE_URL,
 				item_selector,
 				"h3",
 				"img",
