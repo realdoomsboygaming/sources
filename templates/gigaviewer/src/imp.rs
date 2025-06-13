@@ -1,10 +1,9 @@
 use super::{auth, models::*, parser, AuthedRequest, Params};
 use aidoku::{
 	alloc::{string::ToString, String, Vec},
-	canvas::{Angle, Color, FontWeight, Point, Transform},
 	helpers::uri::QueryParameters,
 	imports::{
-		canvas::{Canvas, Font, ImageRef, Rect},
+		canvas::{Canvas, ImageRef, Rect},
 		error::AidokuError,
 		net::Request,
 		std::send_partial_result,
@@ -248,16 +247,6 @@ pub trait Impl {
 
 			canvas.copy_image(&response.image, cell_src, cell_dst);
 		}
-
-		canvas.set_transform(&Transform::rotation(Angle::degrees(-40.0)));
-
-		canvas.draw_text(
-			"Splashed 🌊",
-			180.,
-			&Point::new(-950., 1300.),
-			&Font::system(FontWeight::Regular),
-			&Color::red(),
-		);
 
 		let result = canvas.get_image();
 		Ok(result)
