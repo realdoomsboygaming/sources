@@ -1,9 +1,9 @@
 use aidoku::{
-	alloc::{String, Vec},
-	imports::net::{HttpMethod, Request},
+	alloc::{vec, String, Vec},
+	imports::net::Request,
 	prelude::*,
 	Chapter, ContentRating, FilterValue, Listing, Manga, MangaPageResult, MangaStatus, Page,
-	Result, Viewer,
+	PageContent, Result, Viewer,
 };
 
 use crate::BASE_API_URL;
@@ -17,7 +17,7 @@ pub fn parse_manga_list(
 	filters: Vec<FilterValue>,
 	page: i32,
 ) -> Result<MangaPageResult> {
-	let mut search_query = query.unwrap_or_default();
+	let search_query = query.unwrap_or_default();
 	let mut genres = String::new();
 
 	for filter in filters {
@@ -200,8 +200,9 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String) -> Result<Vec
 
 			all_chapters.push(Chapter {
 				key,
-				manga_key: manga_id.clone(),
-				chapter: chapter_number,
+				title: None,
+				chapter_number,
+				volume_number: None,
 				date_uploaded,
 				url,
 				..Default::default()
@@ -215,16 +216,24 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String) -> Result<Vec
 
 pub fn parse_page_list(
 	base_url: String,
-	manga_id: String,
-	chapter_id: String,
+	_manga_key: String,
+	chapter_key: String,
 ) -> Result<Vec<Page>> {
-	let url = format!("{}/series/{}/{}", base_url, manga_id, chapter_id);
+	// Extract manga ID from chapter key format
+	let parts: Vec<&str> = chapter_key.split('-').collect();
+	let manga_id = if parts.len() > 1 {
+		parts[0]
+	} else {
+		return Ok(Vec::new());
+	};
+	
+	let url = format!("{}/series/{}/{}", base_url, manga_id, chapter_key);
 	let obj = Request::get(&url)?.html()?;
 
 	let mut page_list: Vec<Page> = Vec::new();
 
-	if let Some(images) = obj.select("img").array() {
-		for (i, page) in images.enumerate() {
+	if let Some(images) = obj.select("img") {
+		for (_i, page) in images.enumerate() {
 			if let Ok(node) = page.as_node() {
 				let mut url = node.attr("data-src").read();
 
@@ -234,8 +243,7 @@ pub fn parse_page_list(
 
 				if !url.is_empty() && !url.contains("icon.png") && !url.contains("banner") {
 					page_list.push(Page {
-						index: i as i32,
-						url,
+						content: PageContent::url(url),
 						..Default::default()
 					});
 				}

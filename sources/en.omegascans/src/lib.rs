@@ -37,8 +37,8 @@ impl Source for OmegaScans {
 		parser::parse_manga_details(&String::from(BASE_URL), manga.key)
 	}
 
-	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		parser::parse_page_list(String::from(BASE_URL), chapter.manga_key, chapter.key)
+	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		parser::parse_page_list(String::from(BASE_URL), manga.key, chapter.key)
 	}
 }
 
@@ -55,7 +55,7 @@ impl ImageRequestProvider for OmegaScans {
 }
 
 impl DeepLinkHandler for OmegaScans {
-	fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
+	fn handle_deep_link(&self, _url: String) -> Result<Option<DeepLinkResult>> {
 		Ok(None)
 	}
 }
