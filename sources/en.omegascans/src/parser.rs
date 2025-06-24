@@ -3,13 +3,66 @@ use aidoku::{
 	imports::net::Request,
 	prelude::*,
 	Chapter, ContentRating, FilterValue, Listing, Manga, MangaPageResult, MangaStatus, Page,
-	PageContent, Result, Value, Viewer,
+	PageContent, Result, Viewer,
 };
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::BASE_API_URL;
 
 extern crate alloc;
 use alloc::string::ToString;
+
+#[derive(Deserialize)]
+struct ApiResponse {
+	data: Vec<MangaData>,
+	#[serde(default)]
+	total: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct MangaData {
+	title: String,
+	thumbnail: String,
+	series_slug: String,
+}
+
+#[derive(Deserialize)]
+struct SeriesResponse {
+	id: i32,
+	title: String,
+	thumbnail: String,
+	description: String,
+	author: String,
+	studio: String,
+	series_slug: String,
+	status: String,
+	tags: Vec<TagData>,
+}
+
+#[derive(Deserialize)]
+struct TagData {
+	name: String,
+}
+
+#[derive(Deserialize)]
+struct ChapterResponse {
+	data: Vec<ChapterData>,
+	meta: MetaData,
+}
+
+#[derive(Deserialize)]
+struct ChapterData {
+	chapter_slug: String,
+	price: i32,
+	created_at: String,
+}
+
+#[derive(Deserialize)]
+struct MetaData {
+	first_page: i32,
+	last_page: i32,
+}
 
 pub fn parse_manga_list(
 	base_url: String,
@@ -66,8 +119,8 @@ pub fn parse_manga_list(
 	}
 
 	let url = format!("{}/query?query_string={}&order=desc&orderBy=total_views&series_type=Comic&page={}&perPage=10&tags_ids=[{}]&adult=true", BASE_API_URL, search_query, page, genres);
-	let json = Request::get(&url)?.send()?;
-	let manga = parse_manga(&base_url, json)?;
+	let response = Request::get(&url)?.send()?;
+	let manga = parse_manga(&base_url, response)?;
 	let has_next_page = !manga.is_empty();
 
 	Ok(MangaPageResult {
@@ -90,8 +143,8 @@ pub fn parse_manga_listing(
 	};
 	let url = format!("{}/query?query_string=&order=desc&orderBy={}&series_type=Comic&page={}&perPage=10&tags_ids=[]&adult=true", BASE_API_URL, list_query, page);
 
-	let json = Request::get(&url)?.send()?;
-	let manga = parse_manga(&base_url, json)?;
+	let response = Request::get(&url)?.send()?;
+	let manga = parse_manga(&base_url, response)?;
 	let has_next_page = !manga.is_empty();
 
 	Ok(MangaPageResult {
@@ -102,16 +155,16 @@ pub fn parse_manga_listing(
 
 pub fn parse_manga_details(base_url: &String, manga_id: String) -> Result<Manga> {
 	let url = format!("{}/series/{}", BASE_API_URL, manga_id);
-	let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
+	let data = Request::get(&url)?.send()?.get_json::<SeriesResponse>()?;
 
-	let cover = data.get("thumbnail").as_string()?.read();
-	let title = data.get("title").as_string()?.read();
-	let description = data.get("description").as_string()?.read();
-	let authors = vec![data.get("author").as_string()?.read()];
-	let artists = vec![data.get("studio").as_string()?.read()];
-	let key = data.get("series_slug").as_string()?.read();
+	let cover = Some(data.thumbnail);
+	let title = data.title;
+	let description = Some(data.description);
+	let authors = vec![data.author];
+	let artists = vec![data.studio];
+	let key = data.series_slug;
 	let url = Some(format!("{}/series/{}", base_url, key));
-	let status_str = data.get("status").as_string()?.read();
+	let status_str = data.status;
 
 	let status = match status_str.as_str() {
 		"New" => MangaStatus::Unknown,
@@ -123,22 +176,16 @@ pub fn parse_manga_details(base_url: &String, manga_id: String) -> Result<Manga>
 		_ => MangaStatus::Unknown,
 	};
 
-	let mut tags: Vec<String> = Vec::new();
-	let tag_array = data.get("tags").as_array()?;
-	for tag in tag_array {
-		let tag = tag.as_object()?;
-		tags.push(tag.get("name").as_string()?.read());
-	}
-
-	let chapters = parse_chapter_list_internal(base_url.clone(), key.clone())?;
+	let tags = data.tags.into_iter().map(|tag| tag.name).collect();
+	let chapters = parse_chapter_list_internal(base_url.clone(), key.clone(), data.id)?;
 
 	Ok(Manga {
 		key,
-		cover: Some(cover),
+		cover,
 		title,
 		authors: Some(authors),
 		artists: Some(artists),
-		description: Some(description),
+		description,
 		url,
 		tags: Some(tags),
 		status,
@@ -149,18 +196,14 @@ pub fn parse_manga_details(base_url: &String, manga_id: String) -> Result<Manga>
 	})
 }
 
-fn parse_chapter_list_internal(base_url: String, manga_id: String) -> Result<Vec<Chapter>> {
-	let url = format!("{}/series/{}", BASE_API_URL, manga_id);
-	let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
-	let series_id = data.get("id").as_int()?.to_string();
-
+fn parse_chapter_list_internal(base_url: String, manga_id: String, series_id: i32) -> Result<Vec<Chapter>> {
 	let url = format!(
 		"{}/chapter/query?page=1&perPage=30&series_id={}",
 		BASE_API_URL, series_id
 	);
-	let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
-	let mut page = data.get("meta").as_object()?.get("first_page").as_int()?;
-	let last_page = data.get("meta").as_object()?.get("last_page").as_int()?;
+	let data = Request::get(&url)?.send()?.get_json::<ChapterResponse>()?;
+	let mut page = data.meta.first_page;
+	let last_page = data.meta.last_page;
 
 	let mut all_chapters: Vec<Chapter> = Vec::new();
 
@@ -169,20 +212,15 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String) -> Result<Vec
 			"{}/chapter/query?page={}&perPage=30&series_id={}",
 			BASE_API_URL, page, series_id
 		);
-		let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
+		let data = Request::get(&url)?.send()?.get_json::<ChapterResponse>()?;
 
-		let chapters = data.get("data").as_array()?;
-
-		for chapter in chapters {
-			let chapter = chapter.as_object()?;
-			let price = chapter.get("price").as_int()?;
-
+		for chapter in data.data {
 			// Only get free chapters
-			if price != 0 {
+			if chapter.price != 0 {
 				continue;
 			}
 
-			let key = chapter.get("chapter_slug").as_string()?.read();
+			let key = chapter.chapter_slug;
 
 			let index = key.split('-').collect::<Vec<&str>>();
 			let chapter_number = if index.len() > 1 {
@@ -193,9 +231,9 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String) -> Result<Vec
 
 			let url = Some(format!("{}/series/{}/{}", base_url, manga_id, key));
 
-			let date_uploaded = chapter
-				.get("created_at")
-				.as_date("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Some("en_US"), None)
+			// Parse the date - this might fail, that's ok
+			let date_uploaded = chrono::DateTime::parse_from_rfc3339(&chapter.created_at)
+				.map(|dt| dt.timestamp())
 				.ok();
 
 			all_chapters.push(Chapter {
@@ -234,10 +272,10 @@ pub fn parse_page_list(
 		.select("img")
 		.map(|els| {
 			els.filter_map(|el| {
-				let mut url = el.attr("data-src").read();
+				let mut url = el.attr("data-src").unwrap_or_default();
 
 				if url.is_empty() {
-					url = el.attr("src").read();
+					url = el.attr("src").unwrap_or_default();
 				}
 
 				if !url.is_empty() && !url.contains("icon.png") && !url.contains("banner") {
@@ -256,22 +294,17 @@ pub fn parse_page_list(
 	Ok(pages)
 }
 
-fn parse_manga(base_url: &String, json: aidoku::imports::net::Response) -> Result<Vec<Manga>> {
-	let data = json.get_json::<Value>()?.as_object()?.get("data").as_array()?;
+fn parse_manga(base_url: &String, response: aidoku::imports::net::Response) -> Result<Vec<Manga>> {
+	let data = response.get_json::<ApiResponse>()?;
 	let mut mangas: Vec<Manga> = Vec::new();
 
-	for manga in data {
-		let manga = manga.as_object()?;
-		let title = manga.get("title").as_string()?.read();
-		let cover = manga.get("thumbnail").as_string()?.read();
-		let key = manga.get("series_slug").as_string()?.read();
-
-		let url = format!("{}/series/{}", base_url, key);
+	for manga in data.data {
+		let url = format!("{}/series/{}", base_url, manga.series_slug);
 
 		mangas.push(Manga {
-			key,
-			cover: Some(cover),
-			title,
+			key: manga.series_slug,
+			cover: Some(manga.thumbnail),
+			title: manga.title,
 			url: Some(url),
 			..Default::default()
 		});
