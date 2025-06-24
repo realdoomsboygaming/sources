@@ -60,16 +60,6 @@ struct MetaData {
 	last_page: i32,
 }
 
-#[derive(Deserialize)]
-struct ChapterImagesResponse {
-	images: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct ChapterDetailResponse {
-	chapter_images: Vec<String>,
-}
-
 pub fn parse_manga_list(
 	base_url: String,
 	query: Option<String>,
@@ -259,56 +249,123 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String, series_id: i3
 }
 
 pub fn parse_page_list(
-	_base_url: String,
+	base_url: String,
 	_manga_key: String,
 	chapter_key: String,
 ) -> Result<Vec<Page>> {
-	// Use the API to get chapter images
-	let url = format!("{}/chapter/{}/images", BASE_API_URL, chapter_key);
+	// Extract manga ID from chapter key format
+	let parts: Vec<&str> = chapter_key.split('-').collect();
+	let manga_id = if parts.len() > 1 {
+		parts[0]
+	} else {
+		return Ok(Vec::new());
+	};
 	
-	let mut response = Request::get(&url)?
-		.header("Accept", "application/json")
-		.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-		.send()?;
-	
-	// Try to parse as JSON first, if that fails, try the fallback approach
-	match response.get_json::<ChapterImagesResponse>() {
-		Ok(data) => {
-			let mut pages = Vec::new();
-			for (_index, image_url) in data.images.iter().enumerate() {
-				pages.push(Page {
-					content: PageContent::url(image_url.clone()),
-					..Default::default()
-				});
-			}
-			Ok(pages)
-		}
-		Err(_) => {
-			// Fallback: try alternative API endpoint
-			let fallback_url = format!("{}/chapter/{}", BASE_API_URL, chapter_key);
-			let fallback_response = Request::get(&fallback_url)?
-				.header("Accept", "application/json")
-				.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-				.send()?;
-			
-			match fallback_response.get_json::<ChapterDetailResponse>() {
-				Ok(data) => {
-					let mut pages = Vec::new();
-					for (_index, image_url) in data.chapter_images.iter().enumerate() {
+	let url = format!("{}/series/{}/{}", base_url, manga_id, chapter_key);
+	let obj = Request::get(&url)?.html()?;
+
+	let mut pages: Vec<Page> = Vec::new();
+
+	// Try multiple selectors for different image loading methods
+	let image_selectors = vec![
+		"img[data-src]",           // Lazy loaded images
+		"img[src]",                // Regular images
+		".page img",               // Images within page containers
+		".chapter-content img",    // Images within chapter content
+		"[data-src]",              // Any element with data-src
+		".page-image",             // Page image containers
+	];
+
+	for selector in image_selectors {
+		if let Ok(elements) = obj.select(selector) {
+			for el in elements {
+				let mut image_url = String::new();
+				
+				// Try different attribute sources
+				if image_url.is_empty() {
+					image_url = el.attr("data-src").unwrap_or_default();
+				}
+				if image_url.is_empty() {
+					image_url = el.attr("src").unwrap_or_default();
+				}
+				if image_url.is_empty() {
+					image_url = el.attr("data-original").unwrap_or_default();
+				}
+				if image_url.is_empty() {
+					image_url = el.attr("data-lazy").unwrap_or_default();
+				}
+
+				// Filter out non-manga images
+				if !image_url.is_empty() 
+					&& !image_url.contains("icon.png") 
+					&& !image_url.contains("banner") 
+					&& !image_url.contains("logo")
+					&& !image_url.contains("avatar")
+					&& !image_url.contains("profile")
+					&& (image_url.contains(".jpg") || image_url.contains(".png") || image_url.contains(".jpeg") || image_url.contains(".webp"))
+				{
+					// Make URL absolute if it's relative
+					let full_url = if image_url.starts_with("http") {
+						image_url
+					} else if image_url.starts_with("/") {
+						format!("{}{}", base_url, image_url)
+					} else {
+						format!("{}/{}", base_url, image_url)
+					};
+
+					// Check if we already have this image
+					let already_exists = pages.iter().any(|page| {
+						match &page.content {
+							PageContent::Url(existing_url) => existing_url == &full_url,
+							_ => false,
+						}
+					});
+
+					if !already_exists {
 						pages.push(Page {
-							content: PageContent::url(image_url.clone()),
+							content: PageContent::url(full_url),
 							..Default::default()
 						});
 					}
-					Ok(pages)
-				}
-				Err(_) => {
-					// If both API calls fail, return empty list
-					Ok(Vec::new())
 				}
 			}
 		}
 	}
+
+	// If no images found through HTML parsing, try to find script tags with image data
+	if pages.is_empty() {
+		if let Ok(scripts) = obj.select("script") {
+			for script in scripts {
+				let script_content = script.text().unwrap_or_default();
+				
+				// Look for common patterns in JavaScript that contain image URLs
+				if script_content.contains("imageUrls") || script_content.contains("pages") || script_content.contains("images") {
+					// Try to extract URLs from JavaScript
+					let lines: Vec<&str> = script_content.lines().collect();
+					for line in lines {
+						if line.contains(".jpg") || line.contains(".png") || line.contains(".jpeg") || line.contains(".webp") {
+							// Simple regex-like extraction for image URLs
+							let words: Vec<&str> = line.split_whitespace().collect();
+							for word in words {
+								if word.contains(".jpg") || word.contains(".png") || word.contains(".jpeg") || word.contains(".webp") {
+									// Clean up the URL (remove quotes, commas, etc.)
+									let clean_url = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
+									if clean_url.starts_with("http") {
+										pages.push(Page {
+											content: PageContent::url(String::from(clean_url)),
+											..Default::default()
+										});
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	Ok(pages)
 }
 
 fn parse_manga(base_url: &String, mut response: aidoku::imports::net::Response) -> Result<Vec<Manga>> {
