@@ -3,7 +3,7 @@ use aidoku::{
 	imports::net::Request,
 	prelude::*,
 	Chapter, ContentRating, FilterValue, Listing, Manga, MangaPageResult, MangaStatus, Page,
-	PageContent, Result, Viewer,
+	PageContent, Result, Value, Viewer,
 };
 
 use crate::BASE_API_URL;
@@ -66,7 +66,7 @@ pub fn parse_manga_list(
 	}
 
 	let url = format!("{}/query?query_string={}&order=desc&orderBy=total_views&series_type=Comic&page={}&perPage=10&tags_ids=[{}]&adult=true", BASE_API_URL, search_query, page, genres);
-	let json = Request::get(&url)?;
+	let json = Request::get(&url)?.send()?;
 	let manga = parse_manga(&base_url, json)?;
 	let has_next_page = !manga.is_empty();
 
@@ -90,7 +90,7 @@ pub fn parse_manga_listing(
 	};
 	let url = format!("{}/query?query_string=&order=desc&orderBy={}&series_type=Comic&page={}&perPage=10&tags_ids=[]&adult=true", BASE_API_URL, list_query, page);
 
-	let json = Request::get(&url)?;
+	let json = Request::get(&url)?.send()?;
 	let manga = parse_manga(&base_url, json)?;
 	let has_next_page = !manga.is_empty();
 
@@ -102,7 +102,7 @@ pub fn parse_manga_listing(
 
 pub fn parse_manga_details(base_url: &String, manga_id: String) -> Result<Manga> {
 	let url = format!("{}/series/{}", BASE_API_URL, manga_id);
-	let data = Request::get(&url)?.json()?.as_object()?;
+	let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
 
 	let cover = data.get("thumbnail").as_string()?.read();
 	let title = data.get("title").as_string()?.read();
@@ -151,14 +151,14 @@ pub fn parse_manga_details(base_url: &String, manga_id: String) -> Result<Manga>
 
 fn parse_chapter_list_internal(base_url: String, manga_id: String) -> Result<Vec<Chapter>> {
 	let url = format!("{}/series/{}", BASE_API_URL, manga_id);
-	let data = Request::get(&url)?.json()?.as_object()?;
+	let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
 	let series_id = data.get("id").as_int()?.to_string();
 
 	let url = format!(
 		"{}/chapter/query?page=1&perPage=30&series_id={}",
 		BASE_API_URL, series_id
 	);
-	let data = Request::get(&url)?.json()?.as_object()?;
+	let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
 	let mut page = data.get("meta").as_object()?.get("first_page").as_int()?;
 	let last_page = data.get("meta").as_object()?.get("last_page").as_int()?;
 
@@ -169,7 +169,7 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String) -> Result<Vec
 			"{}/chapter/query?page={}&perPage=30&series_id={}",
 			BASE_API_URL, page, series_id
 		);
-		let data = Request::get(&url)?.json()?.as_object()?;
+		let data = Request::get(&url)?.send()?.get_json::<Value>()?.as_object()?;
 
 		let chapters = data.get("data").as_array()?;
 
@@ -230,32 +230,34 @@ pub fn parse_page_list(
 	let url = format!("{}/series/{}/{}", base_url, manga_id, chapter_key);
 	let obj = Request::get(&url)?.html()?;
 
-	let mut page_list: Vec<Page> = Vec::new();
-
-	if let Some(images) = obj.select("img") {
-		for (_i, page) in images.enumerate() {
-			if let Ok(node) = page.as_node() {
-				let mut url = node.attr("data-src").read();
+	let pages = obj
+		.select("img")
+		.map(|els| {
+			els.filter_map(|el| {
+				let mut url = el.attr("data-src").read();
 
 				if url.is_empty() {
-					url = node.attr("src").read();
+					url = el.attr("src").read();
 				}
 
 				if !url.is_empty() && !url.contains("icon.png") && !url.contains("banner") {
-					page_list.push(Page {
+					Some(Page {
 						content: PageContent::url(url),
 						..Default::default()
-					});
+					})
+				} else {
+					None
 				}
-			}
-		}
-	}
+			})
+			.collect::<Vec<_>>()
+		})
+		.unwrap_or_default();
 
-	Ok(page_list)
+	Ok(pages)
 }
 
-fn parse_manga(base_url: &String, json: Request) -> Result<Vec<Manga>> {
-	let data = json.json()?.as_object()?.get("data").as_array()?;
+fn parse_manga(base_url: &String, json: aidoku::imports::net::Response) -> Result<Vec<Manga>> {
+	let data = json.get_json::<Value>()?.as_object()?.get("data").as_array()?;
 	let mut mangas: Vec<Manga> = Vec::new();
 
 	for manga in data {
