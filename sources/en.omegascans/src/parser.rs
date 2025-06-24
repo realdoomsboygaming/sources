@@ -60,6 +60,16 @@ struct MetaData {
 	last_page: i32,
 }
 
+#[derive(Deserialize)]
+struct ChapterImagesResponse {
+	images: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ChapterDetailResponse {
+	chapter_images: Vec<String>,
+}
+
 pub fn parse_manga_list(
 	base_url: String,
 	query: Option<String>,
@@ -249,45 +259,58 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String, series_id: i3
 }
 
 pub fn parse_page_list(
-	base_url: String,
+	_base_url: String,
 	_manga_key: String,
 	chapter_key: String,
 ) -> Result<Vec<Page>> {
-	// Extract manga ID from chapter key format
-	let parts: Vec<&str> = chapter_key.split('-').collect();
-	let manga_id = if parts.len() > 1 {
-		parts[0]
-	} else {
-		return Ok(Vec::new());
-	};
+	// Use the API to get chapter images
+	let url = format!("{}/chapter/{}/images", BASE_API_URL, chapter_key);
 	
-	let url = format!("{}/series/{}/{}", base_url, manga_id, chapter_key);
-	let obj = Request::get(&url)?.html()?;
-
-	let pages = obj
-		.select("img")
-		.map(|els| {
-			els.filter_map(|el| {
-				let mut url = el.attr("data-src").unwrap_or_default();
-
-				if url.is_empty() {
-					url = el.attr("src").unwrap_or_default();
+	let mut response = Request::get(&url)?
+		.header("Accept", "application/json")
+		.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		.send()?;
+	
+	// Try to parse as JSON first, if that fails, try the fallback approach
+	match response.get_json::<ChapterImagesResponse>() {
+		Ok(data) => {
+			let mut pages = Vec::new();
+			for (index, image_url) in data.images.iter().enumerate() {
+				pages.push(Page {
+					content: PageContent::url(image_url.clone()),
+					index: index as i32,
+					..Default::default()
+				});
+			}
+			Ok(pages)
+		}
+		Err(_) => {
+			// Fallback: try alternative API endpoint
+			let fallback_url = format!("{}/chapter/{}", BASE_API_URL, chapter_key);
+			let fallback_response = Request::get(&fallback_url)?
+				.header("Accept", "application/json")
+				.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+				.send()?;
+			
+			match fallback_response.get_json::<ChapterDetailResponse>() {
+				Ok(data) => {
+					let mut pages = Vec::new();
+					for (index, image_url) in data.chapter_images.iter().enumerate() {
+						pages.push(Page {
+							content: PageContent::url(image_url.clone()),
+							index: index as i32,
+							..Default::default()
+						});
+					}
+					Ok(pages)
 				}
-
-				if !url.is_empty() && !url.contains("icon.png") && !url.contains("banner") {
-					Some(Page {
-						content: PageContent::url(url),
-						..Default::default()
-					})
-				} else {
-					None
+				Err(_) => {
+					// If both API calls fail, return empty list
+					Ok(Vec::new())
 				}
-			})
-			.collect::<Vec<_>>()
-		})
-		.unwrap_or_default();
-
-	Ok(pages)
+			}
+		}
+	}
 }
 
 fn parse_manga(base_url: &String, mut response: aidoku::imports::net::Response) -> Result<Vec<Manga>> {

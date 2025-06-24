@@ -50,7 +50,10 @@ impl ListingProvider for OmegaScans {
 
 impl ImageRequestProvider for OmegaScans {
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
-		Ok(Request::get(&url)?.header("Referer", BASE_URL))
+		Ok(Request::get(&url)?
+			.header("Referer", BASE_URL)
+			.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+			.header("Accept", "image/webp,image/apng,image/*,*/*;q=0.8"))
 	}
 }
 
