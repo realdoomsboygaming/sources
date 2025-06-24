@@ -6,12 +6,8 @@ use aidoku::{
 	PageContent, Result, Viewer,
 };
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::BASE_API_URL;
-
-extern crate alloc;
-use alloc::string::ToString;
 
 #[derive(Deserialize)]
 struct ApiResponse {
