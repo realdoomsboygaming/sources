@@ -2,7 +2,7 @@
 	"info": {
 		"id": "en.omegascans",
 		"name": "Omega Scans",
-		"version": 5,
+		"version": 6,
 		"urls": ["https://omegascans.org"],
 		"contentRating": 2,
 		"languages": ["en"]
