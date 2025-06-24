@@ -250,122 +250,53 @@ fn parse_chapter_list_internal(base_url: String, manga_id: String, series_id: i3
 
 pub fn parse_page_list(
 	base_url: String,
-	_manga_key: String,
+	manga_key: String,
 	chapter_key: String,
 ) -> Result<Vec<Page>> {
-	// Extract manga ID from chapter key format
-	let parts: Vec<&str> = chapter_key.split('-').collect();
-	let manga_id = if parts.len() > 1 {
-		parts[0]
-	} else {
-		return Ok(Vec::new());
-	};
-	
-	let url = format!("{}/series/{}/{}", base_url, manga_id, chapter_key);
+	let url = format!("{}/series/{}/{}", base_url, manga_key, chapter_key);
 	let obj = Request::get(&url)?.html()?;
 
-	let mut pages: Vec<Page> = Vec::new();
+	let mut page_list: Vec<Page> = Vec::new();
 
-	// Try multiple selectors for different image loading methods
-	let image_selectors = vec![
-		"img[data-src]",           // Lazy loaded images
-		"img[src]",                // Regular images
-		".page img",               // Images within page containers
-		".chapter-content img",    // Images within chapter content
-		"[data-src]",              // Any element with data-src
-		".page-image",             // Page image containers
-	];
+	if let Some(images) = obj.select("img") {
+		for img in images {
+			let mut url = img.attr("data-src").unwrap_or_default();
 
-	for selector in image_selectors {
-		if let Some(elements) = obj.select(selector) {
-			for el in elements {
-				let mut image_url = String::new();
-				
-				// Try different attribute sources
-				if image_url.is_empty() {
-					image_url = el.attr("data-src").unwrap_or_default();
+			if url.is_empty() {
+				url = img.attr("src").unwrap_or_default();
+			}
+
+			if !url.is_empty() {
+				page_list.push(Page {
+					content: PageContent::url(url),
+					..Default::default()
+				});
+			}
+		}
+	}
+
+	// Remove icon.png and banners from top and bottom if they exist
+	if !page_list.is_empty() {
+		// Check if first image is likely an icon/banner
+		if let Some(first_page) = page_list.first() {
+			if let PageContent::Url(first_url, _) = &first_page.content {
+				if first_url.contains("icon.png") || first_url.contains("banner") || first_url.contains("logo") {
+					page_list.remove(0);
 				}
-				if image_url.is_empty() {
-					image_url = el.attr("src").unwrap_or_default();
-				}
-				if image_url.is_empty() {
-					image_url = el.attr("data-original").unwrap_or_default();
-				}
-				if image_url.is_empty() {
-					image_url = el.attr("data-lazy").unwrap_or_default();
-				}
-
-				// Filter out non-manga images
-				if !image_url.is_empty() 
-					&& !image_url.contains("icon.png") 
-					&& !image_url.contains("banner") 
-					&& !image_url.contains("logo")
-					&& !image_url.contains("avatar")
-					&& !image_url.contains("profile")
-					&& (image_url.contains(".jpg") || image_url.contains(".png") || image_url.contains(".jpeg") || image_url.contains(".webp"))
-				{
-					// Make URL absolute if it's relative
-					let full_url = if image_url.starts_with("http") {
-						image_url
-					} else if image_url.starts_with("/") {
-						format!("{}{}", base_url, image_url)
-					} else {
-						format!("{}/{}", base_url, image_url)
-					};
-
-					// Check if we already have this image
-					let already_exists = pages.iter().any(|page| {
-						match &page.content {
-							PageContent::Url(existing_url, _) => existing_url == &full_url,
-							_ => false,
-						}
-					});
-
-					if !already_exists {
-						pages.push(Page {
-							content: PageContent::url(full_url),
-							..Default::default()
-						});
-					}
+			}
+		}
+		
+		// Check if last image is likely a banner
+		if let Some(last_page) = page_list.last() {
+			if let PageContent::Url(last_url, _) = &last_page.content {
+				if last_url.contains("banner") || last_url.contains("logo") || last_url.contains("footer") {
+					page_list.pop();
 				}
 			}
 		}
 	}
 
-	// If no images found through HTML parsing, try to find script tags with image data
-	if pages.is_empty() {
-		if let Some(scripts) = obj.select("script") {
-			for script in scripts {
-				let script_content = script.text().unwrap_or_default();
-				
-				// Look for common patterns in JavaScript that contain image URLs
-				if script_content.contains("imageUrls") || script_content.contains("pages") || script_content.contains("images") {
-					// Try to extract URLs from JavaScript
-					let lines: Vec<&str> = script_content.lines().collect();
-					for line in lines {
-						if line.contains(".jpg") || line.contains(".png") || line.contains(".jpeg") || line.contains(".webp") {
-							// Simple regex-like extraction for image URLs
-							let words: Vec<&str> = line.split_whitespace().collect();
-							for word in words {
-								if word.contains(".jpg") || word.contains(".png") || word.contains(".jpeg") || word.contains(".webp") {
-									// Clean up the URL (remove quotes, commas, etc.)
-									let clean_url = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
-									if clean_url.starts_with("http") {
-										pages.push(Page {
-											content: PageContent::url(String::from(clean_url)),
-											..Default::default()
-										});
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	Ok(pages)
+	Ok(page_list)
 }
 
 fn parse_manga(base_url: &String, mut response: aidoku::imports::net::Response) -> Result<Vec<Manga>> {
