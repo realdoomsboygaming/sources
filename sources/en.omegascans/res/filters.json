@@ -1,0 +1,36 @@
+[
+	{
+		"type": "select",
+		"id": "genre",
+		"title": "Genres",
+		"isGenre": true,
+		"options": [
+			"All",
+			"Romance",
+			"Drama", 
+			"Fantasy",
+			"Hardcore",
+			"SM",
+			"Harem",
+			"Hypnosis",
+			"Novel Adaptation",
+			"Netori",
+			"Netorare",
+			"Isekai",
+			"Yuri",
+			"MILF",
+			"Office",
+			"Short Story",
+			"Comedy",
+			"Campus",
+			"Crime",
+			"Revenge",
+			"Supernatural",
+			"Action",
+			"Military",
+			"Cohabitation",
+			"Training",
+			"Ability"
+		]
+	}
+]

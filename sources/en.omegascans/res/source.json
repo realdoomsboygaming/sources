@@ -1,0 +1,33 @@
+{
+	"info": {
+		"id": "en.omegascans",
+		"name": "Omega Scans",
+		"version": 4,
+		"urls": ["https://omegascans.org"],
+		"contentRating": 2,
+		"languages": ["en"]
+	},
+	"listings": [
+		{
+			"id": "latest",
+			"name": "Latest Updates"
+		},
+		{
+			"id": "popular",
+			"name": "Popular"
+		},
+		{
+			"id": "newest",
+			"name": "Newest"
+		},
+		{
+			"id": "alphabetical",
+			"name": "Alphabetical"
+		}
+	],
+	"config": {
+		"supportsAuthorSearch": false,
+		"supportsTagSearch": true,
+		"hidesFiltersWhileSearching": false
+	}
+}
