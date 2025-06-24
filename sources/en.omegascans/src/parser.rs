@@ -275,10 +275,9 @@ pub fn parse_page_list(
 	match response.get_json::<ChapterImagesResponse>() {
 		Ok(data) => {
 			let mut pages = Vec::new();
-			for (index, image_url) in data.images.iter().enumerate() {
+			for (_index, image_url) in data.images.iter().enumerate() {
 				pages.push(Page {
 					content: PageContent::url(image_url.clone()),
-					index: index as i32,
 					..Default::default()
 				});
 			}
@@ -295,10 +294,9 @@ pub fn parse_page_list(
 			match fallback_response.get_json::<ChapterDetailResponse>() {
 				Ok(data) => {
 					let mut pages = Vec::new();
-					for (index, image_url) in data.chapter_images.iter().enumerate() {
+					for (_index, image_url) in data.chapter_images.iter().enumerate() {
 						pages.push(Page {
 							content: PageContent::url(image_url.clone()),
-							index: index as i32,
 							..Default::default()
 						});
 					}
