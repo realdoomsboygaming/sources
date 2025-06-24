@@ -290,7 +290,7 @@ pub fn parse_page_list(
 	Ok(pages)
 }
 
-fn parse_manga(base_url: &String, response: aidoku::imports::net::Response) -> Result<Vec<Manga>> {
+fn parse_manga(base_url: &String, mut response: aidoku::imports::net::Response) -> Result<Vec<Manga>> {
 	let data = response.get_json::<ApiResponse>()?;
 	let mut mangas: Vec<Manga> = Vec::new();
 
