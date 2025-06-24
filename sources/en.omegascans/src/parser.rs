@@ -277,7 +277,7 @@ pub fn parse_page_list(
 	];
 
 	for selector in image_selectors {
-		if let Ok(elements) = obj.select(selector) {
+		if let Some(elements) = obj.select(selector) {
 			for el in elements {
 				let mut image_url = String::new();
 				
@@ -316,7 +316,7 @@ pub fn parse_page_list(
 					// Check if we already have this image
 					let already_exists = pages.iter().any(|page| {
 						match &page.content {
-							PageContent::Url(existing_url) => existing_url == &full_url,
+							PageContent::Url(existing_url, _) => existing_url == &full_url,
 							_ => false,
 						}
 					});
@@ -334,7 +334,7 @@ pub fn parse_page_list(
 
 	// If no images found through HTML parsing, try to find script tags with image data
 	if pages.is_empty() {
-		if let Ok(scripts) = obj.select("script") {
+		if let Some(scripts) = obj.select("script") {
 			for script in scripts {
 				let script_content = script.text().unwrap_or_default();
 				
